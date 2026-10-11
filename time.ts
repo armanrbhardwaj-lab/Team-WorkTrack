@@ -1,1 +1,0 @@
-export function minutesBetween(start:Date,end:Date):number{return Math.max(0,Math.round((end.getTime()-start.getTime())/60000))} export function formatTime(date:Date):string{return new Intl.DateTimeFormat('en-IN',{hour:'2-digit',minute:'2-digit',hour12:true}).format(date)}

@@ -1,1 +1,0 @@
-// Manual smoke-test examples; a test runner is not configured in this starter. import {minutesBetween} from './time'; console.assert(minutesBetween(new Date('2026-01-01T09:00:00'),new Date('2026-01-01T10:30:00'))===90);

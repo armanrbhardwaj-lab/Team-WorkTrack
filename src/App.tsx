@@ -41,11 +41,11 @@ function downloadCSV(rows: string[][], filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function minutesBetween(start: string, end: string, breakMinutes: number) {
+function minutesBetween(start: string, end: string) {
   if (!start || !end) return 0;
   const [sh, sm] = start.split(":").map(Number);
   const [eh, em] = end.split(":").map(Number);
-  return Math.max(0, eh * 60 + em - sh * 60 - sm - breakMinutes);
+  return Math.max(0, eh * 60 + em - sh * 60 - sm);
 }
 
 function hoursLabel(minutes: number) {
@@ -69,12 +69,11 @@ export default function App() {
   const [projectId, setProjectId] = useState("");
   const [startTime, setStartTime] = useState("09:30");
   const [endTime, setEndTime] = useState("18:30");
-  const [breakMinutes, setBreakMinutes] = useState(60);
   const [description, setDescription] = useState("");
 
   const workspace = membership?.organizations;
   const roleLabel = membership?.role?.replaceAll("_", " ") ?? "";
-  const calculatedMinutes = minutesBetween(startTime, endTime, breakMinutes);
+  const calculatedMinutes = minutesBetween(startTime, endTime);
 
   const loadWorkspace = useCallback(async (id: string, userEmailAddress: string) => {
     if (!supabase) return;
@@ -183,6 +182,41 @@ export default function App() {
     };
   }, [loadWorkspace]);
 
+  // Keyboard shortcuts: Alt+Shift+D = Date, Alt+Shift+I = Time In, Alt+Shift+O = Time Out.
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!event.altKey || !event.shiftKey || event.ctrlKey || event.metaKey) return;
+
+      const key = event.key.toLowerCase();
+      const fieldIds: Record<string, string> = {
+        d: "workDate",
+        i: "startTime",
+        o: "endTime",
+      };
+      const fieldId = fieldIds[key];
+      if (!fieldId) return;
+
+      const target = event.target as HTMLElement | null;
+      if (target?.isContentEditable || target?.tagName === "TEXTAREA") return;
+      if (target instanceof HTMLInputElement &&
+          !["date", "time"].includes(target.type)) return;
+
+      const field = document.getElementById(fieldId) as HTMLInputElement | null;
+      if (!field || field.disabled) return;
+
+      event.preventDefault();
+      field.focus();
+      try {
+        field.showPicker?.();
+      } catch {
+        // Some browsers do not allow opening a native picker from every shortcut.
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, []);
+
   async function login(event: FormEvent) {
     event.preventDefault();
     if (!supabase) return;
@@ -219,11 +253,6 @@ export default function App() {
       setNotice("End time must be later than start time. Overnight shifts are not supported yet.");
       return;
     }
-    if (breakMinutes < 0 || breakMinutes > 720) {
-      setNotice("Break minutes must be between 0 and 720.");
-      return;
-    }
-
     setBusy(true);
     setNotice("");
 
@@ -234,7 +263,7 @@ export default function App() {
       work_date: workDate,
       start_time: startTime,
       end_time: endTime,
-      break_minutes: breakMinutes,
+      break_minutes: 0,
       description: description.trim() || null,
       status: "pending"
     });
@@ -252,13 +281,12 @@ export default function App() {
   function exportTimesheets() {
     const projectName = (id: string) => projects.find(project => project.id === id)?.name ?? id;
     const rows = [
-      ["Work Date", "Project", "Start Time", "End Time", "Break Minutes", "Net Hours", "Description", "Status"],
+      ["Work Date", "Project", "Start Time", "End Time", "Net Hours", "Description", "Status"],
       ...entries.map(entry => [
         entry.work_date,
         projectName(entry.project_id),
         entry.start_time,
         entry.end_time,
-        String(entry.break_minutes),
         hoursLabel(Number(entry.work_minutes)),
         entry.description ?? "",
         entry.status
@@ -352,7 +380,7 @@ export default function App() {
 
               <section className="card timesheet-panel">
                 <h2><Plus size={20} /> Add Daily Timesheet</h2>
-                <p>Net working time is calculated automatically, excluding break minutes.</p>
+                <p>Net working time is calculated automatically from Time In and Time Out. Keyboard shortcuts: Alt + Shift + D (Date), Alt + Shift + I (Time In), Alt + Shift + O (Time Out).</p>
                 <form onSubmit={submitTimesheet}>
                   <label htmlFor="workDate">Work date</label>
                   <input id="workDate" type="date" value={workDate} onChange={e => setWorkDate(e.target.value)} required />
@@ -368,9 +396,6 @@ export default function App() {
                     <div><label htmlFor="startTime">Start time</label><input id="startTime" type="time" value={startTime} onChange={e => setStartTime(e.target.value)} required /></div>
                     <div><label htmlFor="endTime">End time</label><input id="endTime" type="time" value={endTime} onChange={e => setEndTime(e.target.value)} required /></div>
                   </div>
-
-                  <label htmlFor="breakMinutes">Break (minutes)</label>
-                  <input id="breakMinutes" type="number" min="0" max="720" value={breakMinutes} onChange={e => setBreakMinutes(Number(e.target.value))} required />
 
                   <label htmlFor="description">Work description / remarks</label>
                   <textarea id="description" rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe the work completed…" />

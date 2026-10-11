@@ -13,12 +13,18 @@ type Membership = {
   organizations: { id: string; name: string; slug: string } | null;
 };
 
-type Project = { id: string; name: string };
+type Client = {
+  id: string;
+  client_code: string;
+  client_name: string;
+  is_active: boolean;
+};
 
 type Timesheet = {
   id: string;
   work_date: string;
-  project_id: string;
+  client_id: string | null;
+  project_id: string | null;
   start_time: string;
   end_time: string;
   break_minutes: number;
@@ -63,10 +69,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
 
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientId, setClientId] = useState("");
+  const [clientSearch, setClientSearch] = useState("");
   const [entries, setEntries] = useState<Timesheet[]>([]);
   const [workDate, setWorkDate] = useState(new Date().toLocaleDateString("en-CA"));
-  const [projectId, setProjectId] = useState("");
   const [startTime, setStartTime] = useState("09:30");
   const [endTime, setEndTime] = useState("18:30");
   const [description, setDescription] = useState("");
@@ -80,7 +87,9 @@ export default function App() {
     setUserId(id);
     setUserEmail(userEmailAddress);
     setMembership(null);
-    setProjects([]);
+    setClients([]);
+    setClientId("");
+    setClientSearch("");
     setEntries([]);
     setNotice("");
 
@@ -103,25 +112,22 @@ export default function App() {
     const member = data as unknown as Membership;
     setMembership(member);
 
-    const { data: assignments, error: assignmentError } = await supabase
-      .from("project_assignments")
-      .select("project_id, projects(id, name)")
+    const { data: clientRows, error: clientError } = await supabase
+      .from("clients")
+      .select("id, client_code, client_name, is_active")
       .eq("organization_id", member.organization_id)
-      .eq("user_id", id);
+      .eq("is_active", true)
+      .order("client_name", { ascending: true });
 
-    if (assignmentError) {
-      setNotice(`Could not load assigned projects: ${assignmentError.message}`);
+    if (clientError) {
+      setNotice(`Could not load clients: ${clientError.message}`);
     } else {
-      const assigned = (assignments ?? [])
-        .map((item: any) => item.projects)
-        .filter((project: any): project is Project => Boolean(project?.id && project?.name));
-      setProjects(assigned);
-      setProjectId(current => assigned.some(project => project.id === current) ? current : assigned[0]?.id ?? "");
+      setClients((clientRows ?? []) as Client[]);
     }
 
     const { data: rows, error: timesheetError } = await supabase
       .from("timesheet_entries")
-      .select("id, work_date, project_id, start_time, end_time, break_minutes, work_minutes, description, status")
+      .select("id, work_date, client_id, project_id, start_time, end_time, break_minutes, work_minutes, description, status")
       .eq("organization_id", member.organization_id)
       .eq("user_id", id)
       .order("work_date", { ascending: false })
@@ -168,8 +174,10 @@ export default function App() {
       } else {
         setSignedIn(false);
         setMembership(null);
-        setProjects([]);
-        setEntries([]);
+        setClients([]);
+        setClientId("");
+        setClientSearch("");
+            setEntries([]);
         setUserId("");
         setUserEmail("");
         setNotice("");
@@ -245,8 +253,12 @@ export default function App() {
 
   async function submitTimesheet(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || !membership || !projectId) {
-      setNotice("Please select an assigned project.");
+    if (!supabase || !membership || !clientId) {
+      setNotice("Please select a client for this timesheet entry.");
+      return;
+    }
+    if (!clients.some(client => client.id === clientId && client.is_active)) {
+      setNotice("Please select an active client from your company list.");
       return;
     }
     if (!startTime || !endTime || calculatedMinutes <= 0) {
@@ -259,7 +271,8 @@ export default function App() {
     const { error } = await supabase.from("timesheet_entries").insert({
       organization_id: membership.organization_id,
       user_id: userId,
-      project_id: projectId,
+      client_id: clientId,
+      project_id: null,
       work_date: workDate,
       start_time: startTime,
       end_time: endTime,
@@ -279,18 +292,23 @@ export default function App() {
   }
 
   function exportTimesheets() {
-    const projectName = (id: string) => projects.find(project => project.id === id)?.name ?? id;
+    const clientForEntry = (id: string | null) => clients.find(client => client.id === id);
     const rows = [
-      ["Work Date", "Project", "Start Time", "End Time", "Net Hours", "Description", "Status"],
-      ...entries.map(entry => [
-        entry.work_date,
-        projectName(entry.project_id),
-        entry.start_time,
-        entry.end_time,
-        hoursLabel(Number(entry.work_minutes)),
-        entry.description ?? "",
-        entry.status
-      ])
+      ["Work Date", "Client Name", "Client Code", "Client ID", "Start Time", "End Time", "Net Hours", "Description", "Status"],
+      ...entries.map(entry => {
+        const client = clientForEntry(entry.client_id);
+        return [
+          entry.work_date,
+          client?.client_name ?? "",
+          client?.client_code ?? "",
+          entry.client_id,
+          entry.start_time,
+          entry.end_time,
+          hoursLabel(Number(entry.work_minutes)),
+          entry.description ?? "",
+          entry.status
+        ];
+      })
     ];
     downloadCSV(rows, "Team-WorkTrack-Timesheets.csv");
   }
@@ -365,9 +383,9 @@ export default function App() {
                   <span className="module-status">{hoursLabel(totalMinutes)}</span>
                 </article>
                 <article className="module-card">
-                  <BriefcaseBusiness /><h3>Assigned Projects</h3>
-                  <p>Only projects assigned to your account are listed.</p>
-                  <span className="module-status">{projects.length} available</span>
+                  <BriefcaseBusiness /><h3>Available Clients</h3>
+                  <p>Choose the client you worked for on each timesheet entry.</p>
+                  <span className="module-status">{clients.length} active</span>
                 </article>
                 <article className="module-card">
                   <FileSpreadsheet /><h3>Excel Reports</h3>
@@ -380,17 +398,61 @@ export default function App() {
 
               <section className="card timesheet-panel">
                 <h2><Plus size={20} /> Add Daily Timesheet</h2>
-                <p>Net working time is calculated automatically from Time In and Time Out. Keyboard shortcuts: Alt + Shift + D (Date), Alt + Shift + I (Time In), Alt + Shift + O (Time Out).</p>
+                <p>Select the client you worked for on each entry. Client records are maintained by your team leader; no project assignment is required. Net working time is calculated automatically from Time In and Time Out. Keyboard shortcuts: Alt + Shift + D (Date), Alt + Shift + I (Time In), Alt + Shift + O (Time Out).</p>
                 <form onSubmit={submitTimesheet}>
                   <label htmlFor="workDate">Work date</label>
                   <input id="workDate" type="date" value={workDate} onChange={e => setWorkDate(e.target.value)} required />
 
-                  <label htmlFor="project">Assigned project</label>
-                  <select id="project" value={projectId} onChange={e => setProjectId(e.target.value)} required disabled={!projects.length}>
-                    <option value="">Select an assigned project</option>
-                    {projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}
-                  </select>
-                  {!projects.length && <p className="notice">No assigned projects found. Ask your administrator to assign a project.</p>}
+                  <label htmlFor="clientSearch">Client Name</label>
+                  <input
+                    id="clientSearch"
+                    list="worktrack-client-options"
+                    value={clientSearch}
+                    onChange={e => {
+                      const value = e.target.value;
+                      setClientSearch(value);
+                      const match = clients.find(client =>
+                        client.client_name.toLocaleLowerCase() === value.trim().toLocaleLowerCase()
+                      );
+                      setClientId(match?.id ?? "");
+                    }}
+                    placeholder="Search and select a client..."
+                    autoComplete="off"
+                    required
+                  />
+                  <datalist id="worktrack-client-options">
+                    {clients.map(client => (
+                      <option key={client.id} value={client.client_name}>
+                        {client.client_code}
+                      </option>
+                    ))}
+                  </datalist>
+
+                  <label htmlFor="clientCode">Client Code</label>
+                  <input
+                    id="clientCode"
+                    value={clients.find(client => client.id === clientId)?.client_code ?? ""}
+                    readOnly
+                    placeholder="Auto-filled from selected client"
+                  />
+
+                  <label htmlFor="clientUuid">Client ID</label>
+                  <input
+                    id="clientUuid"
+                    value={clientId}
+                    readOnly
+                    placeholder="Auto-filled from selected client"
+                  />
+
+                  <label htmlFor="clientUuid">Client ID</label>
+                  <input
+                    id="clientUuid"
+                    value={clientId}
+                    readOnly
+                    placeholder="Automatically mapped from Client Name"
+                  />
+
+                  {!clients.length && <p className="notice">No active clients found for this workspace. Ask your team leader to create a client.</p>}
 
                   <div className="time-grid">
                     <div><label htmlFor="startTime">Start time</label><input id="startTime" type="time" value={startTime} onChange={e => setStartTime(e.target.value)} required /></div>
@@ -401,7 +463,7 @@ export default function App() {
                   <textarea id="description" rows={3} value={description} onChange={e => setDescription(e.target.value)} placeholder="Describe the work completed…" />
 
                   <div className="hours-preview"><Clock3 size={18} /><span>Net working time</span><b>{hoursLabel(calculatedMinutes)}</b></div>
-                  <button disabled={busy || !projects.length || calculatedMinutes <= 0}>
+                  <button disabled={busy || !clientId || calculatedMinutes <= 0}>
                     {busy ? "Processing…" : "Submit Timesheet"}
                   </button>
                 </form>
@@ -414,18 +476,19 @@ export default function App() {
                 </div>
                 <div className="table-wrap">
                   <table>
-                    <thead><tr><th>Date</th><th>Project</th><th>Time</th><th>Net hours</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Date</th><th>Client</th><th>Client Code</th><th>Time</th><th>Net hours</th><th>Status</th></tr></thead>
                     <tbody>
                       {entries.map(entry => (
                         <tr key={entry.id}>
                           <td>{entry.work_date}</td>
-                          <td>{projects.find(project => project.id === entry.project_id)?.name ?? "Assigned project"}</td>
+                          <td>{clients.find(client => client.id === entry.client_id)?.client_name ?? "Client"}</td>
+                          <td>{clients.find(client => client.id === entry.client_id)?.client_code ?? "—"}</td>
                           <td>{entry.start_time?.slice(0, 5)}–{entry.end_time?.slice(0, 5)}</td>
                           <td>{hoursLabel(Number(entry.work_minutes || 0))}</td>
                           <td><span className="role-badge">{entry.status}</span></td>
                         </tr>
                       ))}
-                      {!entries.length && <tr><td colSpan={5}>No timesheet entries yet. Submit your first entry above.</td></tr>}
+                      {!entries.length && <tr><td colSpan={6}>No timesheet entries yet. Submit your first entry above.</td></tr>}
                     </tbody>
                   </table>
                 </div>
